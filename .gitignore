@@ -1,0 +1,10 @@
+*.pyc
+__pycache__
+.cache
+*~
+doc/build/*
+.DS_Store
+*.egg-info/
+doc/webgit
+doc/source/fe_utils.*
+doc/source/bibtex.json
