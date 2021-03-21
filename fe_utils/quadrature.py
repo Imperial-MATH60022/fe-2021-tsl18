@@ -12,8 +12,8 @@ class QuadratureRule(object):
           rule is defined.
         :param degree: the :ref:`degree of precision <degree-of-precision>`
           of this quadrature rule.
-        :points: a list of the position vectors of the quadrature points.
-        :weights: the corresponding vector of quadrature weights.
+        :param points: a list of the position vectors of the quadrature points.
+        :param weights: the corresponding vector of quadrature weights.
         """
 
         #: The :class:`~.ReferenceCell` over which this quadrature
@@ -29,22 +29,24 @@ class QuadratureRule(object):
 
         if self.cell.dim != self.points.shape[1]:
             raise ValueError(
-                "Dimension mismatch between reference cell and quadrature points")
+                "Dimension mismatch between reference cell" \
+                " and quadrature points")
         if self.points.shape[0] != len(self.weights):
             raise ValueError(
-                "Number of quadrature points and quadrature weights must match")
+                "Number of quadrature points and quadrature" \
+                " weights must match")
 
     def integrate(self, function):
         """Integrate the function provided using this quadrature rule.
 
         :param function: A Python function taking a position vector as
           its single argument and returning a scalar value.
-
-        The implementation of this method is left as an :ref:`exercise
-        <ex-integrate>`.
         """
 
-        raise NotImplementedError
+        # Apply the function to each position vector in the points set.
+        values = np.apply_along_axis(function, 1, self.points)
+        # Return the weighted sum of those values:
+        return np.dot(self.weights, values)
 
 
 def gauss_quadrature(cell, degree):

@@ -32,8 +32,8 @@ class Mesh(object):
 
         if self.dim == 2:
             self.edge_vertices = np.array(list(set(tuple(sorted(e))
-                                                   for t in cell_vertices
-                                                   for e in itertools.combinations(t, 2))))
+                for t in cell_vertices
+                for e in itertools.combinations(t, 2))))
             """The indices of the vertices incident to edge (only for 2D
             meshes)."""
 
@@ -71,6 +71,21 @@ class Mesh(object):
         #: :class:`Mesh` is composed.
         self.cell = (0, ReferenceInterval, ReferenceTriangle)[self.dim]
 
+
+
+        # Construct a linear Lagrange basis on the reference cell:
+        linear_basis = LagrangeElement(self.cell, 1)
+        # Create the (0, 0) vertex we want to evaluate the gradient at:
+        zero_vertex = np.zeros((1, self.dim))
+        # Precompute the gradient of the linear basis at zero to speed up
+        # Jacobian calculations later:
+        
+        #: The gradient of the linear Lagrange basis for the 
+        #: :class:`~.reference_elements.ReferenceCell` of this :class:`Mesh`
+        #: evaluated at (0, 0).
+        self.grad_linear_basis = linear_basis.tabulate(
+            zero_vertex, grad=True)[0, ...]
+
     def adjacency(self, dim1, dim2):
         """Return the set of `dim2` entities adjacent to each `dim1`
         entity. For example if `dim1==2` and `dim2==1` then return the list of
@@ -107,11 +122,29 @@ class Mesh(object):
     def jacobian(self, c):
         """Return the Jacobian matrix for the specified cell.
 
-        :param c: The number of the cell for which to return the Jacobian.
-        :result: The Jacobian for cell ``c``.
+        :param c: The index of the cell(s) for which to return the Jacobian.
+        :result: The Jacobian for cells ``c``.
         """
 
-        raise NotImplementedError
+        # If we are working with a single cell:
+        if isinstance(c, int):
+            # Find the global vertex coordinates for this cell:
+            xhat = self.vertex_coords[self.cell_vertices[c], :]
+            # Since J_{a, b} = sum_j { (xhat_j)_a  * grad_b(basis_j)(X) } 
+            # for any X, if we set X = 0, this is the definition of matrix
+            # multiplication between xhat^T and self.grad_linear_basis,
+            # so J is given by:
+            return xhat.T @ self.grad_linear_basis
+        else:
+            # Find the vertices we are working with:
+            vertex_indices = self.cell_vertices[c]
+            # Find the global vertex coordinates for all of the cells:
+            xhat = self.vertex_coords[vertex_indices.ravel(), :] \
+                .reshape(vertex_indices.shape[0], self.dim + 1, self.dim)
+            # As J_{c, a, b} = sum_j { (xhat_{j, c})_a * grad_b(basis_j)(X) } 
+            # like above, we can represent it using einsum as (transposed)
+            # matrix multiplication along the first axis:
+            return np.einsum('ikj,kl->ijl', xhat, self.grad_linear_basis)
 
 
 class UnitIntervalMesh(Mesh):
