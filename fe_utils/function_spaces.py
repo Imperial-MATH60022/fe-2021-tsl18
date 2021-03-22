@@ -1,6 +1,7 @@
 import numpy as np
 from . import ReferenceTriangle, ReferenceInterval
 from .finite_elements import LagrangeElement, lagrange_points
+from .quadrature import gauss_quadrature
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.tri import Triangulation
@@ -12,10 +13,8 @@ class FunctionSpace(object):
         """A finite element space.
 
         :param mesh: The :class:`~.mesh.Mesh` on which this space is built.
-        :param element: The :class:`~.finite_elements.FiniteElement` of this space.
-
-        Most of the implementation of this class is left as an :ref:`exercise
-        <ex-function-space>`.
+        :param element: The :class:`~.finite_elements.FiniteElement`
+                        of this space.
         """
 
         #: The :class:`~.mesh.Mesh` on which this space is built.
@@ -23,15 +22,34 @@ class FunctionSpace(object):
         #: The :class:`~.finite_elements.FiniteElement` of this space.
         self.element = element
 
-        raise NotImplementedError
-
-        # Implement global numbering in order to produce the global
-        # cell node list for this space.
         #: The global cell node list. This is a two-dimensional array in
         #: which each row lists the global nodes incident to the corresponding
-        #: cell. The implementation of this member is left as an
-        #: :ref:`exercise <ex-function-space>`
-        self.cell_nodes = None
+        #: cell.
+        self.cell_nodes = np.zeros(
+            (mesh.entity_counts[-1], element.nodes.shape[0]), 
+            dtype=np.int32)
+
+        # Keep a running total for the current global index:
+        G_base = 0
+        # For each entity dimension:
+        for d in range(mesh.dim + 1):
+            #Calculate the number of nodes for each entity of this dimension.
+            N_d = element.nodes_per_entity[d]
+            # For each entity of that dimension:
+            for e in element.cell.topology[d]:
+                # For each cell in the mesh:
+                for c in range(mesh.entity_counts[-1]):
+                    # Find i from the adjacency and calculate 
+                    # the starting global index:
+                    i = c if d == mesh.dim else \
+                        mesh.adjacency(mesh.dim, d)[c, e]
+                    G = G_base + i*N_d
+                    # Set the corresponding indices in the lookup 
+                    # table according to (4.3):
+                    idxs = np.arange(G, G + N_d)
+                    self.cell_nodes[c, element.entity_nodes[d][e]] = idxs
+            # Add to the global index:
+            G_base += N_d * mesh.entity_counts[d]
 
         #: The total number of nodes in the function space.
         self.node_count = np.dot(element.nodes_per_entity, mesh.entity_counts)
@@ -103,7 +121,8 @@ class Function(object):
 
         fs = self.function_space
 
-        d = subdivisions or (2 * (fs.element.degree + 1) if fs.element.degree > 1 else 2)
+        d = subdivisions or (2 * (fs.element.degree + 1) \
+            if fs.element.degree > 1 else 2)
 
         if fs.element.cell is ReferenceInterval:
             fig = plt.figure()
@@ -158,7 +177,7 @@ class Function(object):
                      for i in range(degree - j)]
                     # Down triangles.
                     + [np.add(np.sum(range(degree + 2 - j, degree + 2)),
-                              (i+1, i + degree + 1 - j + 1, i + degree + 1 - j))
+                            (i+1, i + degree + 1 - j + 1, i + degree + 1 - j))
                        for j in range(degree - 1)
                        for i in range(degree - 1 - j)]))
 
@@ -166,5 +185,29 @@ class Function(object):
         """Integrate this :class:`Function` over the domain.
 
         :result: The integral (a scalar)."""
-
-        raise NotImplementedError
+        
+        fs = self.function_space
+        # Construct a quadrature rule for the reference cell:
+        quadrature_rule = gauss_quadrature(fs.element.cell, fs.element.degree)
+        # Evaluate the basis polynomials at the quadrature points and
+        # weight them accordingly:
+        basis_points = fs.element.tabulate(quadrature_rule.points)
+        weighted_points = basis_points * quadrature_rule.weights[:, None]
+        # Calculate the values of the function at each node of each cell:
+        node_values = self.values[fs.cell_nodes.ravel()] \
+            .reshape(fs.cell_nodes.shape)
+        # Find the absolute value of the determinant of the 
+        # Jacobian for each cell:
+        detJs = np.abs(np.linalg.det(fs.mesh.jacobian(...)))
+        # Weight the values of the function according to the 
+        # change of variable factor:
+        weighted_values = node_values * detJs[:, None]
+        # Evaluate the quadrature rule according to (5.14) 
+        # for all cells at once:
+        return np.einsum('ij,kj->', weighted_points, weighted_values)
+        # We use np.einsum to perform the triple sum efficiently: 
+        # sum_c sum_q sum_i weighted_values(c, i)*weighted_points(q, i)
+        # is the sum of all elements of weighted_points @ weighted_values^T.
+        # The einsum form of (2D) summation is 'ij->', the form of matrix 
+        # multiplication is 'ij,jk->jk' and the form of the 
+        # transpose is 'ij->ji' so we have 'ij,kj->'.
